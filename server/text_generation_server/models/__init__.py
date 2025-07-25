@@ -1,65 +1,60 @@
 # ruff: noqa: F821
 # the above line disables the `undefined-name` rule for the model type variables
 
+import enum
+import os
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import torch
+import transformers
 from compressed_tensors.compressors.model_compressors.model_compressor import (
     QuantizationConfig,
 )
 from compressed_tensors.quantization import QuantizationType
-from pydantic import ValidationError
-import enum
-import os
-from typing import Optional, List, Dict
-from pathlib import Path
+from huggingface_hub import HfApi, hf_hub_download
 from loguru import logger
-
-import torch
-import transformers
+from pydantic import ValidationError
 from transformers.configuration_utils import PretrainedConfig
-from transformers.models.auto import modeling_auto
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
-from huggingface_hub import hf_hub_download, HfApi
+from transformers.models.auto import modeling_auto
 
-from text_generation_server.utils.speculate import get_speculate, set_speculate
-from text_generation_server.models.model import Model
-from text_generation_server.models.causal_lm import CausalLM, CausalLMBatchKeysLast
-
-from text_generation_server.models.custom_modeling.opt_modeling import OPTForCausalLM
-from text_generation_server.models.custom_modeling.mpt_modeling import (
-    MPTForCausalLM,
-)
+from text_generation_server.adapters.lora import LoraWeights
 from text_generation_server.models.bloom import BloomCausalLMBatch
+from text_generation_server.models.causal_lm import CausalLM, CausalLMBatchKeysLast
 from text_generation_server.models.custom_modeling.bloom_modeling import (
     BloomForCausalLM,
-)
-from text_generation_server.models.globals import ATTENTION
-from text_generation_server.models.seq2seq_lm import Seq2SeqLM
-from text_generation_server.models.galactica import GalacticaCausalLMBatch
-from text_generation_server.models.custom_modeling.neox_modeling import (
-    GPTNeoxForCausalLM,
-)
-from text_generation_server.models.custom_modeling.phi_modeling import (
-    PhiConfig,
-    PhiForCausalLM,
 )
 from text_generation_server.models.custom_modeling.flash_phi_moe_modeling import (
     PhiMoEConfig,
 )
+from text_generation_server.models.custom_modeling.mpt_modeling import (
+    MPTForCausalLM,
+)
+from text_generation_server.models.custom_modeling.neox_modeling import (
+    GPTNeoxForCausalLM,
+)
+from text_generation_server.models.custom_modeling.opt_modeling import OPTForCausalLM
+from text_generation_server.models.custom_modeling.phi_modeling import (
+    PhiConfig,
+    PhiForCausalLM,
+)
 from text_generation_server.models.custom_modeling.t5_modeling import (
     T5ForConditionalGeneration,
 )
-
-
+from text_generation_server.models.galactica import GalacticaCausalLMBatch
+from text_generation_server.models.globals import ATTENTION
+from text_generation_server.models.model import Model
+from text_generation_server.models.seq2seq_lm import Seq2SeqLM
 from text_generation_server.utils.adapter import (
+    AdapterInfo,
     AdapterParameters,
     build_layer_weight_lookup,
     load_and_merge_adapters,
-    AdapterInfo,
 )
-from text_generation_server.adapters.lora import LoraWeights
-
-
 from text_generation_server.utils.import_utils import SYSTEM
 from text_generation_server.utils.log import log_master
+from text_generation_server.utils.speculate import get_speculate, set_speculate
 
 # The flag below controls whether to allow TF32 on matmul. This flag defaults to False
 # in PyTorch 1.12 and later.
@@ -83,25 +78,21 @@ FLASH_ATT_ERROR_MESSAGE = "{} requires Flash Attention enabled models."
 FLASH_ATTENTION = True
 
 try:
-    from text_generation_server.models.flash_causal_lm import FlashCausalLM
-    from text_generation_server.models.vlm_causal_lm import VlmCausalLM
-    from text_generation_server.models.mllama_causal_lm import MllamaCausalLM
-    from text_generation_server.models.custom_modeling.flash_deepseek_v2_modeling import (
-        FlashDeepseekV2ForCausalLM,
-        DeepseekV2Config,
-    )
-    from text_generation_server.models.custom_modeling.flash_deepseek_v3_modeling import (
-        FlashDeepseekV3ForCausalLM,
-        DeepseekV3Config,
-    )
-    from text_generation_server.models.custom_modeling.flash_llama_modeling import (
-        FlashLlamaForCausalLM,
-    )
+    from text_generation_server.layers.attention import SUPPORTS_WINDOWING
     from text_generation_server.models.custom_modeling.flash_cohere_modeling import (
         FlashCohereForCausalLM,
     )
-    from text_generation_server.models.custom_modeling.flash_gemma_modeling import (
-        FlashGemmaForCausalLM,
+    from text_generation_server.models.custom_modeling.flash_dbrx_modeling import (
+        DbrxConfig,
+        FlashDbrxForCausalLM,
+    )
+    from text_generation_server.models.custom_modeling.flash_deepseek_v2_modeling import (
+        DeepseekV2Config,
+        FlashDeepseekV2ForCausalLM,
+    )
+    from text_generation_server.models.custom_modeling.flash_deepseek_v3_modeling import (
+        DeepseekV3Config,
+        FlashDeepseekV3ForCausalLM,
     )
     from text_generation_server.models.custom_modeling.flash_gemma2_modeling import (
         FlashGemma2ForCausalLM,
@@ -110,20 +101,23 @@ try:
         FlashGemma3ForCausalLM,
         Gemma3ForConditionalGeneration,
     )
-    from text_generation_server.models.custom_modeling.gemma3.processing_gemma3 import (
-        Gemma3Processor,
+    from text_generation_server.models.custom_modeling.flash_gemma_modeling import (
+        FlashGemmaForCausalLM,
     )
-    from text_generation_server.models.custom_modeling.gemma3.configuration_gemma3 import (
-        Gemma3Config,
-        Gemma3TextConfig,
+    from text_generation_server.models.custom_modeling.flash_gpt2_modeling import (
+        FlashGPT2ForCausalLM,
     )
-    from text_generation_server.models.custom_modeling.flash_dbrx_modeling import (
-        FlashDbrxForCausalLM,
-        DbrxConfig,
+    from text_generation_server.models.custom_modeling.flash_gptj_modeling import (
+        FlashGPTJForCausalLM,
     )
-    from text_generation_server.models.custom_modeling.flash_rw_modeling import (
-        RWConfig,
-        FlashRWForCausalLM,
+    from text_generation_server.models.custom_modeling.flash_llama_modeling import (
+        FlashLlamaForCausalLM,
+    )
+    from text_generation_server.models.custom_modeling.flash_mistral_modeling import (
+        FlashMistralForCausalLM,
+    )
+    from text_generation_server.models.custom_modeling.flash_mixtral_modeling import (
+        FlashMixtralForCausalLM,
     )
     from text_generation_server.models.custom_modeling.flash_neox_modeling import (
         FlashGPTNeoXForCausalLM,
@@ -134,38 +128,28 @@ try:
     from text_generation_server.models.custom_modeling.flash_phi_modeling import (
         FlashPhiForCausalLM,
     )
-    from text_generation_server.models.idefics_causal_lm import IdeficsCausalLM
-    from text_generation_server.models.mllama_causal_lm import MllamaCausalLMBatch
-    from text_generation_server.models.custom_modeling.mllama import (
-        MllamaForConditionalGeneration,
-    )
-    from text_generation_server.models.custom_modeling.llava_next import (
-        LlavaNextForConditionalGeneration,
-    )
-
-    from text_generation_server.models.custom_modeling.flash_santacoder_modeling import (
-        FlashSantacoderForCausalLM,
-    )
-    from text_generation_server.models.custom_modeling.flash_starcoder2_modeling import (
-        FlashStarcoder2ForCausalLM,
-    )
     from text_generation_server.models.custom_modeling.flash_qwen2_modeling import (
         Qwen2ForCausalLM,
     )
     from text_generation_server.models.custom_modeling.flash_qwen3_modeling import (
         Qwen3ForCausalLM,
     )
-    from text_generation_server.models.custom_modeling.flash_mistral_modeling import (
-        FlashMistralForCausalLM,
+    from text_generation_server.models.custom_modeling.flash_rw_modeling import (
+        FlashRWForCausalLM,
+        RWConfig,
     )
-    from text_generation_server.models.custom_modeling.flash_mixtral_modeling import (
-        FlashMixtralForCausalLM,
+    from text_generation_server.models.custom_modeling.flash_santacoder_modeling import (
+        FlashSantacoderForCausalLM,
     )
-    from text_generation_server.models.custom_modeling.flash_gpt2_modeling import (
-        FlashGPT2ForCausalLM,
+    from text_generation_server.models.custom_modeling.flash_starcoder2_modeling import (
+        FlashStarcoder2ForCausalLM,
     )
-    from text_generation_server.models.custom_modeling.flash_gptj_modeling import (
-        FlashGPTJForCausalLM,
+    from text_generation_server.models.custom_modeling.gemma3.configuration_gemma3 import (
+        Gemma3Config,
+        Gemma3TextConfig,
+    )
+    from text_generation_server.models.custom_modeling.gemma3.processing_gemma3 import (
+        Gemma3Processor,
     )
     from text_generation_server.models.custom_modeling.idefics2 import (
         Idefics2ForConditionalGeneration,
@@ -173,15 +157,27 @@ try:
     from text_generation_server.models.custom_modeling.idefics3 import (
         Idefics3ForConditionalGeneration,
     )
+    from text_generation_server.models.custom_modeling.llava_next import (
+        LlavaNextForConditionalGeneration,
+    )
+    from text_generation_server.models.custom_modeling.mllama import (
+        MllamaForConditionalGeneration,
+    )
+    from text_generation_server.models.custom_modeling.qwen2_5_vl import (
+        Qwen2_5_VLConfig,
+        Qwen2_5_VLProcessor,
+        Qwen2_5VLForConditionalGeneration,
+    )
     from text_generation_server.models.custom_modeling.qwen2_vl import (
         Qwen2VLForConditionalGeneration,
     )
-    from text_generation_server.models.custom_modeling.qwen2_5_vl import (
-        Qwen2_5VLForConditionalGeneration,
-        Qwen2_5_VLConfig,
-        Qwen2_5_VLProcessor,
+    from text_generation_server.models.flash_causal_lm import FlashCausalLM
+    from text_generation_server.models.idefics_causal_lm import IdeficsCausalLM
+    from text_generation_server.models.mllama_causal_lm import (
+        MllamaCausalLM,
+        MllamaCausalLMBatch,
     )
-    from text_generation_server.layers.attention import SUPPORTS_WINDOWING
+    from text_generation_server.models.vlm_causal_lm import VlmCausalLM
 except ImportError as e:
     log_master(logger.warning, f"Could not import Flash Attention enabled models: {e}")
     SUPPORTS_WINDOWING = False
@@ -354,7 +350,7 @@ class ModelType(enum.Enum):
     QWEN3 = {
         "type": "qwen3",
         "name": "Qwen 3",
-        "url": "https://huggingface.co/collections/Qwen/qwen3-67c6c6f89c4f76621268bb6d",
+        "url": "https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f",
     }
     QWEN2_VL = {
         "type": "qwen2_vl",
