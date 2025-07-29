@@ -176,6 +176,9 @@ COPY proto proto
 COPY server server
 COPY server/Makefile server/Makefile
 ENV HF_KERNELS_CACHE=/kernels
+ARG HF_TOKEN
+ENV HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
+
 RUN cd server && \
 	uv sync --frozen --extra gen --extra bnb --extra accelerate --extra compressed-tensors --extra quantize --extra peft --extra outlines --extra torch --no-install-project --active && \
     make gen-server-raw && \
